@@ -311,10 +311,12 @@ def update_job_status(
     job.failed_stage = None
     job.last_error_code = None
     job.updated_at = get_ist_now()
-    # "Approve" from the panel is an explicit human sign-off — record who/when.
-    if status == "photo_done":
-        job.approved_by = admin
-        job.approved_at = get_ist_now()
+    # Whoever touched the row owns it from here. This used to fire only for
+    # "photo_done", which left every other panel action anonymous — a job moved
+    # to "sent" or "failed" by hand had no trace of who did it. The column is
+    # still called approved_by; read it as "last changed by an admin".
+    job.approved_by = admin
+    job.approved_at = get_ist_now()
     db.commit()
     db.refresh(job)
 
@@ -341,7 +343,8 @@ class UpdateJobFieldsRequest(BaseModel):
 
 
 @router.patch("/{job_id}/fields")
-def update_job_fields(job_id: int, body: UpdateJobFieldsRequest, db: Session = Depends(get_db)):
+def update_job_fields(job_id: int, body: UpdateJobFieldsRequest, db: Session = Depends(get_db),
+                      admin: str = Depends(get_current_admin)):
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -368,6 +371,8 @@ def update_job_fields(job_id: int, body: UpdateJobFieldsRequest, db: Session = D
     if not updated:
         raise HTTPException(status_code=400, detail="No fields provided to update")
 
+    job.approved_by = admin
+    job.approved_at = get_ist_now()
     job.updated_at = get_ist_now()
     db.commit()
     db.refresh(job)
@@ -383,7 +388,8 @@ class UpdateVideoUrlRequest(BaseModel):
 
 
 @router.patch("/{job_id}/video-url")
-def update_video_url(job_id: int, body: UpdateVideoUrlRequest, db: Session = Depends(get_db)):
+def update_video_url(job_id: int, body: UpdateVideoUrlRequest, db: Session = Depends(get_db),
+                     admin: str = Depends(get_current_admin)):
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -394,6 +400,8 @@ def update_video_url(job_id: int, body: UpdateVideoUrlRequest, db: Session = Dep
     else:
         assets.final_video_url = body.final_video_url
 
+    job.approved_by = admin
+    job.approved_at = get_ist_now()
     job.updated_at = get_ist_now()
     db.commit()
     return {"success": True, "message": f"Final video URL updated for job {job_id}",
