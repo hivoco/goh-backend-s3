@@ -490,6 +490,35 @@ per-request network call. The ~130 MB `.mmdb` is **not** in git; the API
 downloads it in the background on first boot and the banner says whether it's
 present. Until it is, `city` is simply NULL — geolocation never blocks a submit.
 
+## MySQL ENUMs and the model's tuples must match exactly
+
+`pipeline_config` (and every other ENUM column) is declared twice: once in MySQL
+and once as a Python tuple in the model. **If the DB holds a value the tuple
+omits, SQLAlchemy raises `LookupError` while materialising the row**, so the
+whole query fails — the endpoint returns 500 rather than that one field
+misbehaving.
+
+That is not hypothetical. `video_quality` was `enum('480p','720p','1080p')` in
+MySQL and `("720p", "1080p")` in the model, and both stored rows were `480p`, so
+**every** pipeline-config read 500'd at once: `/config/list`, `/config/active`,
+`/config/{id}`, `/config/pipeline/paused`, and the create and rollback endpoints
+(which read the previous active config first). `/config/audit` and
+`/config/options` kept working, because neither touches the table — that split is
+the giveaway when you next see it.
+
+Two rules follow:
+
+- **Order matters as well as membership.** MySQL stores an ENUM by ordinal
+  position, so the tuple has to list the values in the DB's own order — `480p`
+  first, here.
+- **Changing an ENUM is a two-file change.** A migration that adds a value and a
+  model that does not list it is a 500 the moment a row uses it, and nothing
+  fails at deploy time to warn you.
+
+To audit every column at once, compare `SHOW COLUMNS FROM <table>` against
+`Model.__table__.columns[...].type.enums`; a mismatch on any row that exists is
+already an outage.
+
 ## Worker (separate, not in this repo)
 
 The renderer should: lock a `queued` entry (`FOR UPDATE SKIP LOCKED`), read the

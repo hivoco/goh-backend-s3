@@ -10,7 +10,13 @@ PHOTO_QUALITIES = ("512px", "1K", "2K", "3K", "4K", "low", "medium", "high", "au
 
 VIDEO_PROVIDERS = ("kie", "segmind")
 VIDEO_MODELS = ("seedance-1.5-pro", "grok-imagine-video-1-5-preview")
-VIDEO_QUALITIES = ("720p", "1080p")
+# "480p" is FIRST, matching the DB's enum('480p','720p','1080p') exactly.
+# MySQL stores an ENUM by ordinal position, so the order here is not cosmetic —
+# and the value list is not either: a row holding a value this tuple omits makes
+# SQLAlchemy raise LookupError while *materialising the row*, so the whole query
+# 500s rather than that one field misbehaving. That is what took /config/list,
+# /config/active and every other pipeline-config read down at once.
+VIDEO_QUALITIES = ("480p", "720p", "1080p")
 
 
 class PipelineConfig(Base):
