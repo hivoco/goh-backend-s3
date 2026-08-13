@@ -396,6 +396,35 @@ if the vision provider is fully saturated or erroring. With the check off, new
 entries land in `unverified` instead of `queued` so nothing unvetted reaches the
 renderer unnoticed.
 
+## When the vision provider is slow
+
+The photo check is the only request in this service that waits on a third party
+for seconds at a time, and it is the one that takes the whole service down with
+it if it is allowed to wait forever. Two guards, both added after an outage:
+
+- **`VISION_TIMEOUT_SECONDS` / `VISION_MAX_RETRIES`** in
+  `app/routers/photo_validation.py`. Both were previously unset, and langchain's
+  clients default to `max_retries=6` with exponential backoff and no timeout. A
+  provider answering `503 UNAVAILABLE` therefore took **99s and 181s** to fail
+  rather than ~2s — measured. With the caps the same failure returns in 1.8s.
+- **The DB session is closed before the call.** `check_photo` needs the session
+  only to read the active vision config; holding it across the model call meant
+  requests that were merely waiting on a third party consumed the pool (10 + 20
+  overflow), and every other endpoint blocked on checkout.
+
+Both matter beyond this endpoint, because **Starlette's threadpool is 40 threads
+shared by every `def` endpoint and every `run_in_threadpool` call.** A vision
+call that occupies a thread for three minutes starves OTP verification, the
+share counter and the admin panel alike. That is not hypothetical — it is what
+"OTP verification is timing out" turned out to be.
+
+**Diagnosing a slow provider.** `analyze_photo` logs elapsed seconds on both
+success and failure, which is the first thing to read: it separates "the
+provider refused us" (fast) from "the provider is degraded" (slow). If every
+model 503s, test a **text-only** call with the same key before blaming the key —
+a key that does text in ~2s but 503s on every image is being throttled on
+multimodal specifically, not deauthorised.
+
 ## Entry lifecycle
 `wait → (queued | process_stop | unverified) → photo_processing → photo_done →
 video_processing → video_done → stitching → uploaded → sent` (or `failed` with a

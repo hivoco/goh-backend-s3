@@ -254,21 +254,42 @@ def to_data_url(file_bytes: bytes, mime_type: str) -> str:
 # values as strings ("1", "true"), which the tolerant _parse_json + Pydantic
 # coercion handle. Groq's json_object mode is NOT used either — it's incompatible
 # with reasoning models, which emit a <think> block before the JSON.
+# How long one vision call may take, and how many times the client may retry it
+# on its own before giving up.
+#
+# BOTH of these were previously unset, and that is what turned a provider outage
+# into a hang. langchain's clients default to max_retries=6 with exponential
+# backoff and NO timeout, so a provider answering 503 "high demand" — measured,
+# on Gemini — took 99s and 181s to fail instead of ~2s. Each of those requests
+# holds a Starlette threadpool thread (there are 40) and a DB connection (there
+# are 30) for its whole duration, so a handful of them starves every other
+# endpoint on the service, including OTP verification. Fail fast instead.
+VISION_TIMEOUT_SECONDS = 25
+VISION_MAX_RETRIES = 1
+
+
 def _build_vision_llm(provider: str, model_name: str, api_key: Optional[str]):
     p = (provider or "groq").lower()
     if p == "groq":
         from langchain_groq import ChatGroq
-        return ChatGroq(model=model_name, api_key=api_key, temperature=0, max_tokens=4096)
+        return ChatGroq(
+            model=model_name, api_key=api_key, temperature=0, max_tokens=4096,
+            timeout=VISION_TIMEOUT_SECONDS, max_retries=VISION_MAX_RETRIES,
+        )
     if p == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             model=model_name, api_key=api_key, temperature=0, max_tokens=1024,
+            timeout=VISION_TIMEOUT_SECONDS, max_retries=VISION_MAX_RETRIES,
             model_kwargs={"response_format": {"type": "json_object"}},
         )
     if p in ("google", "gemini"):
         from langchain_google_genai import ChatGoogleGenerativeAI
         # Gemini returns JSON when the prompt asks for it; _parse_json handles it.
-        return ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, temperature=0)
+        return ChatGoogleGenerativeAI(
+            model=model_name, google_api_key=api_key, temperature=0,
+            timeout=VISION_TIMEOUT_SECONDS, max_retries=VISION_MAX_RETRIES,
+        )
     raise ValueError(f"Unsupported vision provider: {provider}")
 
 
@@ -325,13 +346,20 @@ def _analyze_with_key(data_url: str, provider: str, model_name: str, prompt: str
 def analyze_photo(data_url: str, provider: str, model_name: str, prompt: str) -> Optional[PhotoAnalysis]:
     """Run the active vision model. For Groq, retry across all configured keys."""
     keys = _keys_for_provider(provider)
+    started = time.perf_counter()
     for api_key in keys:
         try:
             tag = f"...{api_key[-6:]}" if api_key else "(env key)"
             print(f"🔑 Analyzing with {provider}/{model_name.split('/')[-1]} key {tag}")
-            return _analyze_with_key(data_url, provider, model_name, prompt, api_key)
+            started = time.perf_counter()
+            result = _analyze_with_key(data_url, provider, model_name, prompt, api_key)
+            print(f"✅ Vision OK in {time.perf_counter() - started:.1f}s ({model_name})")
+            return result
         except Exception as e:
-            print(f"❌ Vision attempt failed ({model_name}): {e}")
+            # The elapsed time is the useful half here: it separates "the
+            # provider refused us" from "the provider is slow", and those have
+            # completely different fixes.
+            print(f"❌ Vision attempt failed after {time.perf_counter() - started:.1f}s ({model_name}): {e}")
             continue
     return None
 
@@ -506,9 +534,20 @@ async def check_photo(photo: UploadFile = File(...), db: Session = Depends(get_d
     resized_bytes, mime_type = resize_image(file_bytes)
     data_url = to_data_url(resized_bytes, mime_type)
 
-    # Load the admin-configured active vision model (provider / model / prompt)
+    # Load the admin-configured active vision model (provider / model / prompt),
+    # then LET GO OF THE CONNECTION before the slow part.
+    #
+    # The vision call takes seconds at best and can take tens of seconds when a
+    # provider is degraded. Holding a pooled DB connection across it means the
+    # pool (10 + 20 overflow) is consumed by requests that are only waiting on a
+    # third party, and every other endpoint — /auth/verify-otp included — then
+    # blocks on checkout. The three values are plain strings; nothing below
+    # needs the session.
     vc = get_active_vision(db) or ensure_default_vision(db)
-    analysis = await run_in_threadpool(analyze_photo, data_url, vc.provider, vc.model_name, vc.prompt)
+    provider, model_name, prompt = vc.provider, vc.model_name, vc.prompt
+    db.close()
+
+    analysis = await run_in_threadpool(analyze_photo, data_url, provider, model_name, prompt)
     if analysis is None:
         print("⚠️ Auto-disabling photo validation — the vision provider failed (admin must re-enable)")
         FeatureFlags.set_flag("photo_validation", False, auto=True)

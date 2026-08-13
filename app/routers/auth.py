@@ -4,7 +4,7 @@ import logging
 from uuid import uuid4
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -27,8 +27,25 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+
+def _thank_you_later(mobile_number: str, name: str) -> None:
+    """Send the WhatsApp thank-you, swallowing any failure.
+
+    Run as a BackgroundTask, i.e. AFTER the response has gone out. It used to be
+    called inline, which put a Gupshup round trip (15s timeout) on the critical
+    path of OTP verification — the frontend gives that call 15s, so a slow
+    WhatsApp API showed the visitor "That took too long. Please check your
+    connection" for an OTP that had in fact verified. Nothing in the response
+    depends on this message, so nothing should wait for it.
+    """
+    try:
+        send_thank_you(mobile_number, name)
+    except Exception as e:
+        logger.warning("Failed to send thank you message: %s", str(e))
+
+
 @router.post("/verify-otp")
-def verify_otp(payload: dict, db: Session = Depends(get_db)):
+def verify_otp(payload: dict, background: BackgroundTasks, db: Session = Depends(get_db)):
     if "mobile_number" not in payload or "otp" not in payload:
         raise HTTPException(status_code=400, detail="Missing required fields: mobile_number and otp")
 
@@ -92,20 +109,14 @@ def verify_otp(payload: dict, db: Session = Depends(get_db)):
 
         Cache.set_pending_video(user.id, str(waiting_job.id))
         print(f"✅ Job {waiting_job.id} status changed: wait → {next_status}")
-        try:
-            send_thank_you(mobile_number, waiting_job.name)
-        except Exception as e:
-            logger.warning("Failed to send thank you message: %s", str(e))
+        background.add_task(_thank_you_later, mobile_number, waiting_job.name)
 
         return {"status": "verified", "job_id": waiting_job.id,
                 "message": "OTP verified. Your video is now queued for processing."}
 
     db.commit()
     latest_job = db.query(Job).filter(Job.user_id == user.id).order_by(Job.id.desc()).first()
-    try:
-        send_thank_you(mobile_number, latest_job.name if latest_job else "")
-    except Exception as e:
-        logger.warning("Failed to send thank you message: %s", str(e))
+    background.add_task(_thank_you_later, mobile_number, latest_job.name if latest_job else "")
     return {"status": "verified", "message": "OTP verified successfully."}
 
 
