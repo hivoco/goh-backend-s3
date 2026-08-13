@@ -167,7 +167,13 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        # TODO: replace with the real campaign + admin domains before launch.
+        # Live campaign + admin.
+        "https://indiagategrainsofhope.com",
+        "https://www.indiagategrainsofhope.com",
+        "https://goh.thefirstimpression.ai",
+        "https://monitor.thefirstimpression.ai",
+        # Placeholders from before the domains were decided. Harmless, but
+        # they're not registered — drop them once you're sure they're unused.
         "https://grainsofhope.in",
         "https://www.grainsofhope.in",
         "https://admin.grainsofhope.in",
