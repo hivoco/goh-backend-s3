@@ -174,6 +174,8 @@ app.add_middleware(
         "http://localhost:3000",   # campaign frontend (dev)
         "http://localhost:3001",   # campaign frontend (dev, alt)
         "http://localhost:8101",   # admin panel (dev)
+        "http://localhost:6018",   # admin panel (dev)
+        "http://localhost:6020",   # admin panel (dev)
     ],
     allow_credentials=True,
     # Explicitly list every method so the preflight's Access-Control-Allow-Methods
