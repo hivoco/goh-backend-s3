@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+*.log
+.DS_Store
+downloads/
+*.csv
+
+# GeoIP city database — 130 MB, downloaded on first boot by app/core/geoip.py.
+# Never commit it: it's regenerated monthly and would bloat every clone.
+app/data/*.mmdb
