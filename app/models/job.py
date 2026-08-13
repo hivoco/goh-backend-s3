@@ -36,7 +36,14 @@ PHOTO_PROVIDERS = ("segmind", "kie", "openai")
 PHOTO_MODELS = ("nano-banana-2", "nano-banana-pro", "gpt-image-2", "seedream-5-lite")
 VIDEO_PROVIDERS = ("kie", "segmind")
 VIDEO_MODELS = ("seedance-1.5-pro", "grok-imagine-video-1-5-preview")
-QUALITIES = ("512px", "1K", "2K", "3K", "4K", "low", "medium", "high", "auto", "720p", "1080p")
+# Photo qualities then video qualities, in the DB's own order — "480p" sits
+# after "auto", not at the end. MySQL stores an ENUM by ordinal position, and a
+# value the DB holds but this tuple omits makes SQLAlchemy raise LookupError
+# while materialising the row, so the whole /jobs/list query 500s rather than
+# that one field misbehaving. That is exactly what "480p" did once the worker
+# started stamping it from the active pipeline config.
+QUALITIES = ("512px", "1K", "2K", "3K", "4K", "low", "medium", "high", "auto",
+             "480p", "720p", "1080p")
 
 
 class Job(Base):

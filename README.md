@@ -498,13 +498,26 @@ omits, SQLAlchemy raises `LookupError` while materialising the row**, so the
 whole query fails — the endpoint returns 500 rather than that one field
 misbehaving.
 
-That is not hypothetical. `video_quality` was `enum('480p','720p','1080p')` in
-MySQL and `("720p", "1080p")` in the model, and both stored rows were `480p`, so
-**every** pipeline-config read 500'd at once: `/config/list`, `/config/active`,
-`/config/{id}`, `/config/pipeline/paused`, and the create and rollback endpoints
-(which read the previous active config first). `/config/audit` and
-`/config/options` kept working, because neither touches the table — that split is
-the giveaway when you next see it.
+That is not hypothetical, and it has happened twice — the same missing value,
+propagating downstream:
+
+1. `pipeline_config.video_quality` was `enum('480p','720p','1080p')` in MySQL and
+   `("720p","1080p")` in the model, and both stored rows were `480p`. **Every**
+   pipeline-config read 500'd at once: `/config/list`, `/config/active`,
+   `/config/{id}`, `/config/pipeline/paused`, and the create and rollback
+   endpoints (which read the previous active config first).
+2. The active config being `480p` then meant the worker stamped `jobs.quality =
+   '480p'` on the rows it picked up — and `QUALITIES` in the job model omitted it
+   too, so **`/jobs/list` started 500ing the moment a job was processed.** Two
+   rows were enough to take the whole admin panel's job list down.
+
+Note the shape of the second one: nothing was wrong until a *worker* wrote a
+legal DB value that the API's model did not know about. A read-only API can be
+broken by a writer it never talks to.
+
+`/config/audit` and `/config/options` kept working throughout, because neither
+touches the table — when one endpoint 500s and its neighbours do not, that split
+is the giveaway.
 
 Two rules follow:
 
@@ -515,9 +528,13 @@ Two rules follow:
   model that does not list it is a 500 the moment a row uses it, and nothing
   fails at deploy time to warn you.
 
-To audit every column at once, compare `SHOW COLUMNS FROM <table>` against
-`Model.__table__.columns[...].type.enums`; a mismatch on any row that exists is
-already an outage.
+**Audit every model at once** rather than the table you happen to be looking at
+— import every module under `app.models`, then for each table in
+`Base.metadata` compare `SHOW COLUMNS` against
+`Base.metadata.tables[t].columns[c].type.enums`. Both bugs above would have been
+caught by one run of that before they reached production, and it takes seconds.
+A mismatch on a value any row already holds is not a latent risk; it is an
+outage that has not been requested yet.
 
 ## Worker (separate, not in this repo)
 
