@@ -54,6 +54,17 @@ def key_from_url(url: str) -> str:
     return path[len(prefix):] if path.startswith(prefix) else path
 
 
+def delete_from_s3(url_or_key: str) -> None:
+    """Delete one object. Idempotent — S3 does not error on a missing key.
+
+    That idempotence is what makes it safe to call this *before* the DB write:
+    if the commit then fails, retrying the whole delete still works. The other
+    order loses the URL and orphans the object with nothing left pointing at it.
+    """
+    key = key_from_url(url_or_key) if url_or_key.startswith("http") else url_or_key
+    s3_client.delete_object(Bucket=settings.AWS_S3_BUCKET, Key=key)
+
+
 def download_bytes_from_s3(url_or_key: str) -> bytes:
     """Read an object back out of the bucket.
 

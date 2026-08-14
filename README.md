@@ -425,6 +425,37 @@ model 503s, test a **text-only** call with the same key before blaming the key �
 a key that does text in ~2s but 503s on every image is being throttled on
 multimodal specifically, not deauthorised.
 
+## Deleting one generated asset
+
+`DELETE /api/v1/jobs/{job_id}/assets/{field}` removes a single rendered photo or
+video from S3 and clears its column. Nothing else on the job is touched.
+
+**Only six fields are deletable**: `photo_url_1..3` and `video_url_1..3`. The
+participant's `selfie_url` and the finished `final_video_url` are refused with a
+400 — they are what the entry *is*, they cannot be regenerated, and no admin
+workflow needs to prune them. Everything deletable can be rebuilt by re-running
+the job. In the panel the same rule is structural rather than a second list: a
+tile shows the delete cross only if it is given an `onDelete`, and those two are
+not given one.
+
+Three details are deliberate:
+
+- **The client sends the field name, not the URL.** The panel receives CDN URLs
+  while the database stores S3 ones, so a URL round-tripped from the browser
+  would never match.
+- **S3 first, then the DB.** `delete_object` is idempotent, so if the commit
+  fails afterwards the whole call can simply be retried. The other order drops
+  the URL and leaves an object with nothing pointing at it.
+- **A shared object is never deleted from the bucket.** A repeat entry reuses an
+  earlier job's rendered assets, so the same URL can appear on more than one
+  row; the endpoint checks every asset column of every other job first, and if
+  the object is shared it clears this job's reference and keeps the file. The
+  response says which happened via `s3_deleted`, and the panel's toast reflects
+  it.
+
+The delete is recorded like any other panel edit — `approved_by` / `approved_at`
+on the job get the admin's name.
+
 ## Entry lifecycle
 `wait → (queued | process_stop | unverified) → photo_processing → photo_done →
 video_processing → video_done → stitching → uploaded → sent` (or `failed` with a
