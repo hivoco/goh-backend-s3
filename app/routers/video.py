@@ -110,12 +110,22 @@ def _clean_number(mobile_number: str) -> str:
     return n
 
 
+# The name is burned into the rendered video, so it is capped at what the
+# template can show. The frontend's input carries the same number as a
+# `maxLength`, but that is a browser convenience only — a direct POST, or an
+# edited attribute, would otherwise put a 120-character name (the column's
+# width) in front of the renderer. This is where the limit is actually enforced.
+NAME_MAX_LENGTH = 8
+
+
 def _validate_inputs(name: str, gender: str, language: str) -> tuple[str, str, str]:
     """Normalise and validate the three enum-ish form fields.
 
     `gender` and `language` are DB ENUMs, so an unexpected value would fail at
     INSERT with an opaque MySQL error — check them here and return a 400 the
-    frontend can show instead.
+    frontend can show instead. `name` is truncated rather than rejected: a
+    too-long name is not the participant doing something wrong, and refusing the
+    entry over it would cost a real signup.
     """
     if not name or not name.strip():
         raise HTTPException(status_code=400, detail="Name is required.")
@@ -128,7 +138,15 @@ def _validate_inputs(name: str, gender: str, language: str) -> tuple[str, str, s
     if lang not in LANGUAGES:
         raise HTTPException(status_code=400, detail=f"Invalid language. Must be one of: {', '.join(LANGUAGES)}")
 
-    return name.strip(), g, lang
+    # Truncated to the first NAME_MAX_LENGTH characters. The trailing strip
+    # matters: cutting "Ravi Kumar" at 8 would otherwise be able to leave a
+    # space on the end, which the renderer would draw as a gap.
+    clean_name = name.strip()[:NAME_MAX_LENGTH].strip()
+    if len(name.strip()) > NAME_MAX_LENGTH:
+        print(f"✂️ name truncated to {NAME_MAX_LENGTH} chars: "
+              f"{name.strip()!r} -> {clean_name!r}")
+
+    return clean_name, g, lang
 
 
 # The stored photo is the RENDER INPUT — the image model generates every frame

@@ -456,6 +456,34 @@ Three details are deliberate:
 The delete is recorded like any other panel edit — `approved_by` / `approved_at`
 on the job get the admin's name.
 
+## The name is capped at 8 characters, and the API is what enforces it
+
+The participant's name is burned into the rendered video, so it is limited to
+what the template can show. `NAME_MAX_LENGTH` in `app/routers/video.py` is the
+single source of that number.
+
+**It truncates, it does not reject.** A long name is not the participant doing
+something wrong, and a 400 over it would cost a real signup. `"Aishwarya"` is
+stored as `"Aishwary"`; the truncation is logged so it is visible in the entry
+log rather than silent. The trailing `.strip()` after the cut matters — slicing
+`"Ravi Kumar"` at 8 can leave a space on the end, which the renderer would draw
+as a gap.
+
+**The frontend's `maxLength={8}` is a convenience, not the enforcement.** It
+stops the typing, but a direct POST to `/video/submit` or an edited attribute
+would otherwise put up to `VARCHAR(120)` in front of the renderer. If the two
+numbers ever diverge, this one wins and the browser one is merely the nicer
+experience — keep them in step.
+
+**Note what a cap this tight excludes.** Aishwarya, Siddharth, Venkatesh,
+Rajeshwari, Ramachandran and any two-part name are all cut. That is a deliberate
+trade against the template's width, not an oversight; if the template ever gains
+room, this constant and the frontend's `maxLength` move together.
+
+**Not covered: the admin panel's name edit.** `PATCH /jobs/{id}/fields` still
+accepts any length, so an admin correcting a name can exceed what the renderer
+can draw. Decide whether that should share the cap.
+
 ## Entry lifecycle
 `wait → (queued | process_stop | unverified) → photo_processing → photo_done →
 video_processing → video_done → stitching → uploaded → sent` (or `failed` with a
